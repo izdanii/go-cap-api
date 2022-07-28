@@ -1,0 +1,40 @@
+package domain
+
+import (
+	"capi/dto"
+	"capi/errs"
+)
+
+type Customer struct {
+	ID          string `json:"ID" db:"customer_id"`
+	Name        string `json:"Name"`
+	City        string `json:"City"`
+	ZipCode     string `json:"ZipCode"`
+	DateOfBirth string `json:"date_of_birth" db:"date_of_birth"`
+	Status      string `json:"status"`
+}
+
+type CustomerRepository interface {
+	FindAll(string) ([]Customer, *errs.AppErr)
+	FindByID(string) (*Customer, *errs.AppErr)
+}
+
+func (c Customer) convertStatusName() string {
+	statusName := "active"
+	if c.Status == "0" {
+		statusName = "inactive"
+	}
+	return statusName
+}
+
+func (c Customer) ToDTO() dto.CustomerResponse {
+	return dto.CustomerResponse{
+		ID:          c.ID,
+		Name:        c.Name,
+		DateOfBirth: c.DateOfBirth,
+		City:        c.City,
+		ZipCode:     c.ZipCode,
+		Status:      c.convertStatusName(),
+	}
+
+}
