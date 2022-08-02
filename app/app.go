@@ -4,10 +4,14 @@ import (
 	"capi/domain"
 	"capi/logger"
 	"capi/service"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
@@ -50,24 +54,32 @@ func Start() {
 	// * setup repository
 	customerRepositoryDB := domain.NewCustomerRepositoryDB(dbClient)
 	accountRepositoryDB := domain.NewAccountRepositoryDB(dbClient)
+	authRepositoryDB := domain.NewAuthRepositoryDB(dbClient)
 
 	// * setup service
 	customerService := service.NewCustomerService(customerRepositoryDB)
 	accountService := service.NewAccountService(accountRepositoryDB)
+	authService := service.NewAuthService(authRepositoryDB)
 
 	// * setup handler
 	ch := CustomerHandlers{customerService}
 	ah := AccountHandler{accountService}
+	authH := AuthHandler{authService}
 
 	// * create ServeMux
 	mux := mux.NewRouter()
 
+	authR := mux.PathPrefix("/auth").Subrouter()
+	authR.HandleFunc("/Login", authH.Login).Methods(http.MethodPost)
+	authR.Use(loggingMiddleware)
+
 	// * defining routes
+	mux.HandleFunc("/auth/login", authH.Login).Methods(http.MethodPost)
 	mux.HandleFunc("/customers", ch.getAllCustomers).Methods(http.MethodGet)
 	mux.HandleFunc("/customers/{customer_id:[0-9]+}", ch.getCustomerByID).Methods(http.MethodGet)
 	mux.HandleFunc("/customers/{customer_id:[0-9]+}/accounts", ah.NewAccount).Methods(http.MethodPost)
 	mux.HandleFunc("/customers/{customer_id:[0-9]+}/accounts/{account_id:[0-9]+}", ah.MakeTransaction).Methods(http.MethodPost)
-
+	mux.Use(authMiddleware)
 	// * starting the server
 
 	serverAddr := os.Getenv("SERVER_ADDRESS")
@@ -92,4 +104,43 @@ func getClientDB() *sqlx.DB {
 	logger.Info("success connect to database...")
 
 	return db
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Do stuff here
+		timer := time.Now()
+		// Call the next handler, which can be another middleware in the chain, or the final handler.
+		next.ServeHTTP(w, r)
+
+		logger.Info(fmt.Sprintf("%v %v %v", r.Method, r.URL, time.Since(timer)))
+	})
+}
+
+func authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenPrep := r.Header.Get("Authorization")
+
+		//split token -> ambil tokennya buang "Bearer" nya
+		splitToken := strings.Split(tokenPrep, " ")
+		tokenPrep = splitToken[1]
+		//parsing token, err := jwt.parse{}
+		token, err := jwt.Parse(tokenPrep, func(token *jwt.Token) (interface{}, error) {
+			return []byte("rahasia"), nil
+		})
+		//check token validation
+		if token.Valid {
+			fmt.Println("You look nice today")
+		} else if errors.Is(err, jwt.ErrTokenMalformed) {
+			fmt.Println("That's not even a token")
+		} else if errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet) {
+			// Token is either expired or not active yet
+			fmt.Println("Timing is everything")
+		} else {
+			fmt.Println("Couldn't handle this token:", err)
+
+			logger.Info("Get the Token " + tokenPrep)
+			next.ServeHTTP(w, r)
+		}
+	})
 }
